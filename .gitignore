@@ -32,5 +32,9 @@ Thumbs.db
 # Trae AI specific files
 .trae/
 
+# Environment variables
+.env
+
 # Output files
 output/
+backtest/data/
