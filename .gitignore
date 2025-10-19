@@ -37,13 +37,8 @@ Thumbs.db
 
 # Output files
 output/
-backtest/data/
-backtest/temp/
-backtest_for_ema926_strategy_in_design_mode/
-backtest_for_ema9_26_point_sum/
-backtest_for_ema_Martin_strategy/
+backtest_for_ema926_strategy_in_design_mode/data/
+backtest_for_ema926_strategy_in_design_mode/temp/
+backtest_for_ema_Martin_strategy/ema_strategy_results/
 backtest_for_ema9_26_point_sum/outlier_strategy_results/
 backtest_for_ema9_26_point_sum/period_analysis/
-
-# Virtual environment
-myquant/
