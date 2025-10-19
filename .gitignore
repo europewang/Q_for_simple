@@ -31,3 +31,6 @@ Thumbs.db
 
 # Trae AI specific files
 .trae/
+
+# Output files
+output/
