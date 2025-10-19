@@ -38,3 +38,4 @@ Thumbs.db
 # Output files
 output/
 backtest/data/
+backtest/temp/
