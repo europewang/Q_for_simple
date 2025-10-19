@@ -42,3 +42,6 @@ backtest/temp/
 backtest_for_ema_Martin_strategy/ema_strategy_results/
 backtest_for_ema9_26_point_sum/outlier_strategy_results/
 backtest_for_ema9_26_point_sum/period_analysis/
+
+# Virtual environment
+myquant/
