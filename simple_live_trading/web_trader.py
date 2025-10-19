@@ -176,9 +176,9 @@ class WebTrader:
         
         # ========== 动态杠杆管理 ==========
         self.base_leverage = CONFIG["base_leverage"]        # 基础杠杆倍数
-        self.current_leverage = CONFIG["base_leverage"]     # 当前杠杆倍数
         self.leverage_increment = CONFIG["leverage_increment"]  # 杠杆增加量
         self.last_trade_pnl = {}    # 记录每个交易对上次交易的盈亏 {symbol: pnl}
+        self.symbol_leverages = {} # 存储每个交易对的当前杠杆
         
         # ========== EMA交叉检测状态 ==========
         self.ema_cross_state = {}   # 记录每个交易对的EMA交叉状态
@@ -324,8 +324,11 @@ class WebTrader:
             # 设置杠杆倍数（使用当前动态杠杆）
             for symbol in CONFIG['symbols']:
                 try:
-                    self.client.futures_change_leverage(symbol=symbol, leverage=self.current_leverage)
-                    self.logger.info(f"✅ {symbol} 杠杆设置为 {self.current_leverage}x（动态杠杆）")
+                    # 从API获取杠杆
+                    leverage = self.get_leverage_from_api(symbol) or self.base_leverage
+                    self.symbol_leverages[symbol] = leverage
+                    self.client.futures_change_leverage(symbol=symbol, leverage=leverage)
+                    self.logger.info(f"✅ {symbol} 杠杆设置为 {leverage}x（动态杠杆）")
                 except Exception as e:
                     self.logger.warning(f"⚠️ {symbol} 杠杆设置失败: {e}")
             
@@ -706,44 +709,55 @@ class WebTrader:
         """
         # 从API获取当前交易对的实际杠杆
         try:
-            position_info = self.client.futures_position_information(symbol=symbol)
-            # position_info 是一个列表，需要找到对应symbol的杠杆
-            current_api_leverage = None
-            for p in position_info:
-                if p['symbol'] == symbol:
-                    current_api_leverage = int(p['leverage'])
-                    break
-            
-            if current_api_leverage is not None:
-                old_leverage = current_api_leverage
-                self.current_leverage = current_api_leverage
-            else:
-                self.logger.warning(f"⚠️ 未能从API获取 {symbol} 的实际杠杆，使用内部记录值 {self.current_leverage}x")
-                old_leverage = self.current_leverage
+            old_leverage = self.symbol_leverages.get(symbol, self.base_leverage)
         except Exception as e:
-            self.logger.error(f"❌ 获取 {symbol} 实际杠杆失败: {e}，使用内部记录值 {self.current_leverage}x")
-            old_leverage = self.current_leverage
+            self.logger.error(f"❌ 获取 {symbol} 实际杠杆失败: {e}，使用内部记录值 {self.base_leverage}x")
+            old_leverage = self.base_leverage
         
+        new_leverage = old_leverage
         if pnl > 0:
             # 盈利：杠杆回归基础杠杆
-            self.current_leverage = self.base_leverage
+            new_leverage = self.base_leverage
             self.logger.info(f"📈 {symbol} 本次交易盈利 {pnl:.2f} USDT，杠杆回归基础值 {self.base_leverage}x")
         else:
             # 亏损：杠杆增加
-            self.current_leverage = min(self.current_leverage + self.leverage_increment, 125)
-            self.logger.info(f"📉 {symbol} 本次交易亏损 {pnl:.2f} USDT，杠杆增加到 {self.current_leverage}x")
+            new_leverage = min(old_leverage + self.leverage_increment, 125)
+            self.logger.info(f"📉 {symbol} 本次交易亏损 {pnl:.2f} USDT，杠杆增加到 {new_leverage}x")
         
         # 记录杠杆变化
-        if old_leverage != self.current_leverage:
-            self.logger.info(f"🔄 {symbol} 杠杆调整: {old_leverage}x → {self.current_leverage}x")
+        if old_leverage != new_leverage:
+            self.logger.info(f"🔄 {symbol} 杠杆调整: {old_leverage}x → {new_leverage}x")
+            self.symbol_leverages[symbol] = new_leverage
             
             # 更新币安API的杠杆设置
             try:
-                self.client.futures_change_leverage(symbol=symbol, leverage=self.current_leverage)
-                self.logger.info(f"✅ {symbol} 币安杠杆已更新为 {self.current_leverage}x")
+                self.client.futures_change_leverage(symbol=symbol, leverage=new_leverage)
+                self.logger.info(f"✅ {symbol} 币安杠杆已更新为 {new_leverage}x")
             except Exception as e:
-                self.logger.error(f"❌ {symbol} 更新币安杠杆失败: {e}，内部杠杆已回滚到 {self.current_leverage}x")
+                self.logger.error(f"❌ {symbol} 更新币安杠杆失败: {e}，内部杠杆已回滚到 {new_leverage}x")
         
+    def get_leverage_from_api(self, symbol: str):
+        """
+        从币安API获取指定交易对的实际杠杆倍数。
+        """
+        try:
+            account_info = self.client.futures_account()
+            current_api_leverage = None
+            for pos in account_info.get('positions', []):
+                if pos.get('symbol') == symbol:
+                    current_api_leverage = int(pos.get('leverage'))
+                    break
+            
+            if current_api_leverage is not None:
+                self.logger.info(f"✅ 成功从API获取 {symbol} 的实际杠杆: {current_api_leverage}x")
+                return current_api_leverage
+            else:
+                self.logger.warning(f"⚠️ 未能从API获取 {symbol} 的实际杠杆（从 futures_account 未找到）")
+                return None
+        except Exception as e:
+            self.logger.error(f"❌ 获取 {symbol} 实际杠杆失败: {e}")
+            return None
+
         # 记录本次交易的盈亏
         self.last_trade_pnl[symbol] = pnl
     
@@ -1391,11 +1405,12 @@ class WebTrader:
         
         # 步骤5: 计算所需保证金
         try:
-            required_margin = fixed_amount / self.current_leverage
+            current_leverage = self.symbol_leverages.get(symbol, self.base_leverage)
+            required_margin = fixed_amount / current_leverage
         except (ZeroDivisionError, TypeError, ValueError) as e:
-            self.logger.error(f"计算保证金失败: {symbol}, 杠杆: {self.current_leverage}, 错误: {e}")
+            self.logger.error(f"计算保证金失败: {symbol}, 杠杆: {current_leverage}, 错误: {e}")
             return 0.0
-        
+
         # 步骤6: 检查余额是否足够
         try:
             if available_balance < required_margin:
@@ -1410,7 +1425,7 @@ class WebTrader:
             if price <= 0:
                 self.logger.error(f"价格无效: {symbol}, 价格: {price}")
                 return 0.0
-            quantity = fixed_amount * self.current_leverage / price
+            quantity = fixed_amount * current_leverage / price
         except (ZeroDivisionError, TypeError, ValueError) as e:
             self.logger.error(f"计算数量失败: {symbol}, 价格: {price}, 错误: {e}")
             return 0.0
@@ -1468,7 +1483,7 @@ class WebTrader:
         # 步骤10: 记录计算结果
         try:
             self.logger.info(f"固定金额交易计算: {symbol}, 固定金额: {CONFIG['fixed_trade_amount']} USDT, "
-                           f"杠杆: {self.current_leverage}x, 价格: {price:.4f}, 计算数量: {quantity:.6f}, "
+                           f"杠杆: {current_leverage}x, 价格: {price:.4f}, 计算数量: {quantity:.6f}, "
                            f"所需保证金: {required_margin:.2f} USDT")
         except Exception as e:
             self.logger.warning(f"记录计算结果失败: {symbol}, 错误: {e}")
@@ -1508,7 +1523,7 @@ class WebTrader:
                 return
             
             # 使用交易引擎执行开仓（新的简化接口）
-            result = self.trader_engine.open_position(symbol, side, quantity, self.current_leverage)
+            result = self.trader_engine.open_position(symbol, side, quantity, self.symbol_leverages.get(symbol, self.base_leverage))
             
             if result["success"]:
                 # 同步持仓信息到WebTrader
