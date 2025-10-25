@@ -8,7 +8,7 @@ EMA交叉策略回测（动态杠杆版本）
 - 在下一个EMA交叉信号时平仓
 - 每次交易使用10U，基础25倍杠杆
 - 动态杠杆调整：亏损后杠杆+1，盈利后杠杆回归25x
-- 使用1小时K线数据
+- 使用半小时K线数据
 """
 
 import pandas as pd
@@ -25,7 +25,7 @@ import json
 
 class EMAStrategy:
     def __init__(self, symbol='ETHUSDT', start_date='2025-05-01', end_date='2025-10-17', 
-                 initial_capital=1000, trade_amount=10, leverage=25, trading_fee=0.00045):
+                 initial_capital=1000, trade_amount=10, leverage=25, trading_fee=0.00045, leverage_increase_on_loss=2):
         """
         初始化EMA交叉策略
         
@@ -47,6 +47,7 @@ class EMAStrategy:
         self.base_leverage = leverage  # 基础杠杆倍数
         self.current_leverage = leverage  # 当前杠杆倍数
         self.trading_fee = trading_fee  # 0.045% = 0.00045
+        self.leverage_increase_on_loss = leverage_increase_on_loss # 亏损后杠杆增加的值
         
         # 交易状态
         self.current_position = None  # 'long', 'short', None
@@ -59,7 +60,7 @@ class EMAStrategy:
         self.kline_data = None
         
         # 创建结果目录
-        self.results_dir = 'ema_strategy_results'
+        self.results_dir = './backtest_for_ema_Martin_strategy/ema_strategy_results'
         if not os.path.exists(self.results_dir):
             os.makedirs(self.results_dir)
     
@@ -208,7 +209,7 @@ class EMAStrategy:
                     print(f"   📈 盈利交易，杠杆回归: {old_leverage}x → {self.current_leverage}x")
                 else:
                     # 亏损：杠杆+2
-                    self.current_leverage += 2
+                    self.current_leverage += self.leverage_increase_on_loss
                     print(f"   📉 亏损交易，杠杆增加: {old_leverage}x → {self.current_leverage}x")
                 
                 # 记录交易
@@ -296,10 +297,11 @@ class EMAStrategy:
         print("开始EMA交叉策略回测（动态杠杆）")
         print(f"交易对: {self.symbol}")
         print(f"时间范围: {self.start_date} 到 {self.end_date}")
+        print(f"K线周期: 半小时")
         print(f"初始资金: {self.initial_capital} U")
         print(f"每次交易金额: {self.trade_amount} U")
         print(f"基础杠杆倍数: {self.base_leverage}x (动态调整)")
-        print(f"杠杆调整规则: 亏损后+1，盈利后回归{self.base_leverage}x")
+        print(f"杠杆调整规则: 亏损后+{self.leverage_increase_on_loss}，盈利后回归{self.base_leverage}x")
         print("=" * 80)
         
         # 获取数据
@@ -480,12 +482,12 @@ EMA交叉策略回测报告
 策略参数:
 - 交易对: {self.symbol}
 - 时间范围: {self.start_date} 到 {self.end_date}
-- K线周期: 1小时
+- K线周期: 半小时
 - EMA参数: EMA9 和 EMA26
 - 初始资金: {self.initial_capital:.2f} U
 - 每次交易金额: {self.trade_amount} U
 - 基础杠杆倍数: {self.base_leverage}x (动态调整)
-- 杠杆调整规则: 亏损后+1，盈利后回归{self.base_leverage}x
+- 杠杆调整规则: 亏损后+{self.leverage_increase_on_loss}，盈利后回归{self.base_leverage}x
 - 交易费用率: {self.trading_fee*100:.3f}% (单边) / {self.trading_fee*2*100:.3f}% (双边)
 
 回测结果:
@@ -519,6 +521,9 @@ EMA交叉策略回测报告
         with open(f'{self.results_dir}/backtest_report.txt', 'w', encoding='utf-8') as f:
             f.write(report_content)
         
+        # 绘制盈亏柱状图
+        self.plot_profit_loss_bar_chart()
+
         # 保存交易记录
         if self.trades:
             trades_df = pd.DataFrame(self.trades)
@@ -558,16 +563,108 @@ EMA交叉策略回测报告
         
         return performance
 
+    def plot_profit_loss_bar_chart(self):
+        """绘制每笔交易的盈亏柱状图，并按半年分割"""
+        if not self.trades:
+            print("没有交易记录，无法绘制盈亏柱状图。")
+            return
+
+        trades_df = pd.DataFrame([t for t in self.trades if t['action'] == 'close'])
+        if trades_df.empty:
+            print("没有完成的交易记录，无法绘制盈亏柱状图。")
+            return
+
+        trades_df['exit_time'] = pd.to_datetime(trades_df['exit_time'])
+
+        # 设置中文字体
+        try:
+            font_manager.fontManager.addfont('/usr/share/fonts/truetype/wqy/wqy-microhei.ttc')
+            plt.rcParams['font.sans-serif'] = ['WenQuanYi Micro Hei']
+            plt.rcParams['axes.unicode_minus'] = False
+        except Exception:
+            print("Warning: Could not set Chinese font. Please ensure 'wqy-microhei.ttc' is installed or adjust font path.")
+            plt.rcParams['font.sans-serif'] = ['DejaVu Sans'] # Fallback to default if Chinese font fails
+
+        # 计算时间范围
+        min_date = trades_df['exit_time'].min()
+        max_date = trades_df['exit_time'].max()
+        
+        # 按半年分割
+        current_start_date = min_date
+        chart_idx = 1
+        
+        while current_start_date <= max_date:
+            current_end_date = current_start_date + pd.DateOffset(months=3) - pd.DateOffset(days=1)
+            
+            # 确保不会超出最大日期
+            if current_end_date > max_date:
+                current_end_date = max_date
+
+            period_trades = trades_df[(trades_df['exit_time'] >= current_start_date) & \
+                                      (trades_df['exit_time'] <= current_end_date)].copy()
+
+            if not period_trades.empty:
+                fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(30, 14), sharex=False) # 创建两个子图，共享x轴改为False，宽度增加一倍
+
+                # --- 上方子图：按时间轴显示盈亏 --- 
+                colors = ['red' if pnl < 0 else 'green' for pnl in period_trades['pnl']]
+                ax1.bar(period_trades['exit_time'], period_trades['pnl'], color=colors, width=0.05)
+
+                for i, pnl_value in enumerate(period_trades['pnl']):
+                    y_position = pnl_value + (1.0 if pnl_value > 0 else -1.0)
+                    ax1.text(period_trades['exit_time'].iloc[i], y_position, f'{pnl_value:.2f}', ha='center', va='center', color='black', fontsize=7, rotation=90)
+                ax1.set_xlabel('平仓时间')
+                ax1.set_ylabel('盈亏 (U)', color='blue')
+                ax1.tick_params(axis='y', labelcolor='blue')
+                ax1.set_title(f'{self.symbol} 每笔交易盈亏 (按时间轴) ({current_start_date.strftime("%Y-%m-%d")} 至 {current_end_date.strftime("%Y-%m-%d")})')
+                ax1.grid(True, linestyle='--', alpha=0.6)
+                fig.autofmt_xdate()
+                ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d %H:%M'))
+
+                # --- 下方子图：按交易序号显示盈亏 --- 
+                # 为当前时间段的交易生成一个交易序号
+                period_trades = period_trades.reset_index(drop=True) # 重置索引以获得从0开始的交易序号
+                trade_indices = period_trades.index + 1 # 交易序号从1开始
+
+                ax2.bar(trade_indices, period_trades['pnl'], color=colors, width=0.05)
+
+                for i, pnl_value in enumerate(period_trades['pnl']):
+                    y_position = pnl_value + (1.0 if pnl_value > 0 else -1.0)
+                    ax2.text(trade_indices[i], y_position, f'{pnl_value:.2f}', ha='center', va='center', color='black', fontsize=7, rotation=90)
+                ax2.set_xlabel('交易序号')
+                ax2.set_ylabel('盈亏 (U)', color='blue')
+                ax2.tick_params(axis='y', labelcolor='blue')
+                ax2.set_title(f'{self.symbol} 每笔交易盈亏 (按交易序号) ({current_start_date.strftime("%Y-%m-%d")} 至 {current_end_date.strftime("%Y-%m-%d")})')
+                ax2.grid(False) # 移除下方子图的背景网格
+                
+                # 确保交易序号的间隔一致，每隔5个显示一个
+                display_indices = trade_indices[::5] # 每隔5个取一个索引
+                display_labels = [str(i) for i in display_indices]
+                ax2.set_xticks(display_indices)
+                ax2.set_xticklabels(display_labels, rotation=90, fontsize=7)
+
+                plt.tight_layout() # 调整布局以避免重叠
+                
+                # 保存图表
+                chart_path = f'{self.results_dir}/profit_loss_bar_chart_{chart_idx}.png'
+                plt.savefig(chart_path, bbox_inches='tight', dpi=300)
+                plt.close(fig)
+                print(f"盈亏柱状图已保存到 {chart_path}")
+                chart_idx += 1
+            
+            current_start_date = current_end_date + pd.DateOffset(days=1)
+
 def main():
     """主函数"""
     # 创建策略实例
     strategy = EMAStrategy(
-        symbol='BNBUSDT',
-        start_date='2024-05-01',
-        end_date='2025-4-17',
-        initial_capital=1000,
-        trade_amount=10,
-        leverage=25
+        symbol='ETHUSDT',
+        start_date='2025-01-01',
+        end_date='2025-10-24',
+        initial_capital=30,
+        trade_amount=3,
+        leverage=25,
+        leverage_increase_on_loss=2  # 亏损后杠杆增加值
     )
     
     # 运行回测

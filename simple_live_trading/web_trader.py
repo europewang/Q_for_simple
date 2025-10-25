@@ -78,7 +78,7 @@ CONFIG = {
     "leverage": 25,                    # 当前杠杆倍数（动态调整）
     "leverage_increment": 2,           # 亏损后杠杆增加量
     "position_percentage": 0.95,       # 默认仓位比例（已弃用，保留兼容性）
-    "fixed_trade_amount": 10.0,        # 固定交易金额（USDT）
+    "fixed_trade_amount": 3,        # 固定交易金额（USDT）
     
     # 资金分配策略（新版本）
     "symbol_allocation": {
@@ -721,7 +721,7 @@ class WebTrader:
             self.logger.info(f"📈 {symbol} 本次交易盈利 {pnl:.2f} USDT，杠杆回归基础值 {self.base_leverage}x")
         else:
             # 亏损：杠杆增加
-            new_leverage = min(old_leverage + self.leverage_increment, 125)
+            new_leverage = min(old_leverage + self.leverage_increment, 60)
             self.logger.info(f"📉 {symbol} 本次交易亏损 {pnl:.2f} USDT，杠杆增加到 {new_leverage}x")
         
         # 记录杠杆变化

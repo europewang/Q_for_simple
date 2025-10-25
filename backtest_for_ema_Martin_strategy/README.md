@@ -43,7 +43,7 @@ pip install -r requirements.txt
 
 3. 运行回测：
 ```bash
-python ema_crossover_strategy.py
+python /home/ubuntu/Code/quant/backtest_for_ema_Martin_strategy/ema_crossover_strategy.py
 ```
 
 ## 输出结果
