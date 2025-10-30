@@ -48,7 +48,8 @@ class EMAStrategy:
         self.current_leverage = leverage  # 当前杠杆倍数
         self.trading_fee = trading_fee  # 0.045% = 0.00045
         self.leverage_increase_on_loss = leverage_increase_on_loss # 亏损后杠杆增加的值
-        
+        self.last_doubling_capital = initial_capital # 记录上次资金翻倍时的资金量，用于动态调整交易金额
+
         # 交易状态
         self.current_position = None  # 'long', 'short', None
         self.position_size = 0
@@ -191,7 +192,13 @@ class EMAStrategy:
                     pnl = abs(self.position_size) * (self.entry_price - price) - trading_fee_amount
                 
                 self.current_capital += pnl
-                
+
+                # 检查资金是否翻倍，如果翻倍则调整交易金额
+                if self.current_capital >= self.last_doubling_capital * 2:
+                    self.trade_amount *= 2
+                    self.last_doubling_capital = self.current_capital
+                    print(f"   🎉 资金翻倍！当前资金: {self.current_capital:.2f} U，交易金额调整为: {self.trade_amount} U")
+
                 print(f"🔄 平仓: {self.current_position} 仓位 (杠杆: {self.current_leverage}x)")
                 print(f"   入场价: {self.entry_price:.2f}, 出场价: {price:.2f}")
                 print(f"   持仓量: {abs(self.position_size):.4f}")
@@ -544,7 +551,8 @@ EMA交叉策略回测报告
                 'pnl': '盈亏金额',
                 'trading_fee': '交易费用',
                 'capital_before': '交易前资金',
-                'capital_after': '交易后资金'
+                'capital_after': '交易后资金',
+                'leverage_used': '杠杆数'
             }
             
             # 重命名列为中文
@@ -552,9 +560,9 @@ EMA交叉策略回测报告
             
             # 重新排列列顺序，将盈亏金额放在第二列
             column_order = [
-                '盈亏状态', '盈亏金额', '交易费用', '时间戳', '操作', '仓位类型', '价格', 
-                '信号类型', '仓位大小', '入场价格', '入场时间', '出场价格', 
-                '出场时间', '交易前资金', '交易后资金'
+                '盈亏状态', '盈亏金额', '交易费用', '时间戳', '操作', '仓位类型', '价格',
+                '信号类型', '仓位大小', '入场价格', '入场时间', '出场价格',
+                '出场时间', '交易前资金', '交易后资金', '杠杆数'
             ]
             trades_df_reordered = trades_df_chinese[column_order]
             trades_df_reordered.to_csv(f'{self.results_dir}/trades_record.csv', index=False, encoding='utf-8-sig')
@@ -658,12 +666,12 @@ def main():
     """主函数"""
     # 创建策略实例
     strategy = EMAStrategy(
-        symbol='ETHUSDT',
-        start_date='2025-01-01',
-        end_date='2025-10-24',
+        symbol='BTCUSDT',
+        start_date='2018-10-01',
+        end_date='2023-10-30',
         initial_capital=30,
-        trade_amount=3,
-        leverage=25,
+        trade_amount=10,
+        leverage=2,
         leverage_increase_on_loss=2  # 亏损后杠杆增加值
     )
     

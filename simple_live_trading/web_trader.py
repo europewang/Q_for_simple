@@ -74,11 +74,11 @@ CONFIG = {
     "ema_long": 26,        # 长期EMA周期
     
     # 风险管理参数
-    "base_leverage": 25,               # 基础杠杆倍数
-    "leverage": 25,                    # 当前杠杆倍数（动态调整）
-    "leverage_increment": 2,           # 亏损后杠杆增加量
+    "base_leverage": 5,               # 基础杠杆倍数
+    "leverage": 5,                    # 当前杠杆倍数（动态调整）
+    "leverage_increment": 5,           # 亏损后杠杆增加量
     "position_percentage": 0.95,       # 默认仓位比例（已弃用，保留兼容性）
-    "fixed_trade_amount": 3,        # 固定交易金额（USDT）
+    "fixed_trade_amount": 2,        # 固定交易金额（USDT）
     
     # 资金分配策略（新版本）
     "symbol_allocation": {
@@ -87,7 +87,7 @@ CONFIG = {
     },
     
     # 系统参数
-    "initial_capital": 1000,  # 初始资金（用于计算收益率）
+    "initial_capital": 30,  # 初始资金（用于计算收益率）
     "check_interval": 3       # 数据更新间隔（秒）
 }
 
@@ -191,6 +191,8 @@ class WebTrader:
         # ========== 日志收集功能 ==========
         self.log_buffer = []        # 日志缓冲区，存储最近的日志条目
         self.max_log_entries = 100  # 最大日志条目数
+        self.original_fixed_trade_amount = CONFIG["fixed_trade_amount"]
+        self.current_fixed_trade_amount = CONFIG["fixed_trade_amount"] # 当前固定交易金额
         
         # ========== 检测状态持久化 ==========
         self.detection_state_file = "logs/detection_state.json"  # 检测状态持久化文件路径
@@ -627,6 +629,14 @@ class WebTrader:
             
             # 更新账户资金信息
             self.capital = float(account_info['totalWalletBalance'])  # 总钱包余额
+
+            # 计算当前资金与初始资金的倍数，并调整固定交易金额
+            if CONFIG["initial_capital"] > 0:
+                capital_multiplier = max(1, int(self.capital / CONFIG["initial_capital"])) # 至少为1倍
+                self.current_fixed_trade_amount = self.original_fixed_trade_amount * capital_multiplier
+                self.logger.info(f"✅ 账户总资金: {self.capital:.2f} U, 初始资金: {CONFIG["initial_capital"]} U, 倍数: {capital_multiplier}x, 调整后固定交易金额: {self.current_fixed_trade_amount:.2f} U")
+            else:
+                self.logger.warning("初始资金(initial_capital)不能为0，无法动态调整交易金额。")
             
         except (ValueError, TypeError, KeyError) as e:
             self.logger.error(f"账户资金信息解析失败: {e}, 数据: {account_info}")
@@ -1398,9 +1408,9 @@ class WebTrader:
         
         # 步骤4: 获取固定交易金额
         try:
-            fixed_amount = CONFIG['fixed_trade_amount']
-        except (KeyError, TypeError) as e:
-            self.logger.error(f"获取固定交易金额失败: {symbol}, 配置: {CONFIG}, 错误: {e}")
+            fixed_amount = self.current_fixed_trade_amount
+        except Exception as e:
+            self.logger.error(f"获取固定交易金额失败: {symbol}, 错误: {e}")
             return 0.0
         
         # 步骤5: 计算所需保证金
@@ -1482,7 +1492,7 @@ class WebTrader:
         
         # 步骤10: 记录计算结果
         try:
-            self.logger.info(f"固定金额交易计算: {symbol}, 固定金额: {CONFIG['fixed_trade_amount']} USDT, "
+            self.logger.info(f"固定金额交易计算: {symbol}, 固定金额: {self.current_fixed_trade_amount:.2f} USDT, "
                            f"杠杆: {current_leverage}x, 价格: {price:.4f}, 计算数量: {quantity:.6f}, "
                            f"所需保证金: {required_margin:.2f} USDT")
         except Exception as e:
