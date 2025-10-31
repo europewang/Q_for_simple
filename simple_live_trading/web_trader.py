@@ -731,7 +731,7 @@ class WebTrader:
             self.logger.info(f"📈 {symbol} 本次交易盈利 {pnl:.2f} USDT，杠杆回归基础值 {self.base_leverage}x")
         else:
             # 亏损：杠杆增加
-            new_leverage = min(old_leverage + self.leverage_increment, 60)
+            new_leverage = min(old_leverage + self.leverage_increment, 100)
             self.logger.info(f"📉 {symbol} 本次交易亏损 {pnl:.2f} USDT，杠杆增加到 {new_leverage}x")
         
         # 记录杠杆变化

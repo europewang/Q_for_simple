@@ -44,6 +44,7 @@ class EMAStrategy:
         self.initial_capital = initial_capital
         self.current_capital = initial_capital
         self.trade_amount = trade_amount
+        self.original_trade_amount = trade_amount # 保存初始交易金额，用于动态调整
         self.base_leverage = leverage  # 基础杠杆倍数
         self.current_leverage = leverage  # 当前杠杆倍数
         self.trading_fee = trading_fee  # 0.045% = 0.00045
@@ -193,11 +194,14 @@ class EMAStrategy:
                 
                 self.current_capital += pnl
 
-                # 检查资金是否翻倍，如果翻倍则调整交易金额
-                if self.current_capital >= self.last_doubling_capital * 2:
-                    self.trade_amount *= 2
-                    self.last_doubling_capital = self.current_capital
-                    print(f"   🎉 资金翻倍！当前资金: {self.current_capital:.2f} U，交易金额调整为: {self.trade_amount} U")
+                # 根据当前资金与初始资金的倍数调整交易金额
+                capital_multiplier = self.current_capital / self.initial_capital
+                # 确保交易金额至少是初始交易金额
+                new_trade_amount = max(self.original_trade_amount, self.original_trade_amount * capital_multiplier)
+                
+                if new_trade_amount != self.trade_amount:
+                    self.trade_amount = new_trade_amount
+                    print(f"   💰 资金变动，交易金额调整为: {self.trade_amount:.2f} U (当前资金: {self.current_capital:.2f} U, 初始资金: {self.initial_capital:.2f} U)")
 
                 print(f"🔄 平仓: {self.current_position} 仓位 (杠杆: {self.current_leverage}x)")
                 print(f"   入场价: {self.entry_price:.2f}, 出场价: {price:.2f}")
