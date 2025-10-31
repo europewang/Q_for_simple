@@ -31,7 +31,7 @@ import json            # JSON数据处理
 import logging         # 日志记录系统
 import threading       # 多线程支持
 import math            # 数学函数，用于保险金计算
-from datetime import datetime  # 日期时间处理
+from datetime import datetime, timedelta  # 日期时间处理
 
 # 第三方库导入
 from flask import Flask, render_template, jsonify  # Flask Web框架
@@ -200,13 +200,6 @@ class WebTrader:
         
         # ========== 系统初始化流程 ==========
         self.setup_logging()        # 1. 设置日志系统
-        self.setup_binance_client() # 2. 初始化币安API连接
-        self.sync_account_info()    # 3. 同步账户信息和持仓
-        self.setup_trader_engine()  # 4. 初始化交易引擎
-        
-        # ========== 检测状态恢复 ==========
-        self.load_detection_state()           # 5. 加载检测状态
-        self.check_missed_detections_on_startup()  # 6. 检查启动时遗漏的检测点
 
         # ========== 资金倍数持久化 ==========
         self.max_capital_multiplier_file = os.path.join(os.path.dirname(__file__), "capital_multiplier.json")
@@ -214,6 +207,14 @@ class WebTrader:
         self.insurance_fund = 0 # 初始保险金为0
         self.last_insurance_fund_multiplier_threshold = 0.0 # 初始保险金倍数阈值为0.0
         self._load_max_capital_multiplier()
+
+        self.setup_binance_client() # 2. 初始化币安API连接
+        self.sync_account_info()    # 3. 同步账户信息和持仓
+        self.setup_trader_engine()  # 4. 初始化交易引擎
+
+        # ========== 检测状态恢复 ==========
+        self.load_detection_state()           # 5. 加载检测状态
+        self.check_missed_detections_on_startup()  # 6. 检查启动时遗漏的检测点
 
     def _load_max_capital_multiplier(self):
         """
@@ -352,6 +353,7 @@ class WebTrader:
         - 连接失败时抛出异常并记录错误日志
         """
         try:
+            self.logger.info(f"当前CONFIG['symbols']配置: {CONFIG['symbols']}")
             # 创建币安客户端实例
             self.client = Client(
                 CONFIG["api_key"],      # API密钥
@@ -550,7 +552,9 @@ class WebTrader:
                         if check_time.minute == 0:
                             check_time = check_time.replace(minute=30)
                         else:
-                            check_time = check_time.replace(minute=0, hour=check_time.hour + 1)
+                            check_time = check_time.replace(minute=0, hour=(check_time.hour + 1) % 24)
+                            if (check_time.hour + 1) % 24 == 0: # 如果小时变为0，说明跨天了，需要增加一天
+                                check_time = check_time + timedelta(days=1)
                     
                     if missed_periods:
                         self.logger.warning(f"{symbol} 发现 {len(missed_periods)} 个遗漏的半小时检测点:")
