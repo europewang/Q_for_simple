@@ -30,6 +30,7 @@ import time            # 时间相关功能，用于延时等操作
 import json            # JSON数据处理
 import logging         # 日志记录系统
 import threading       # 多线程支持
+import math            # 数学函数，用于保险金计算
 from datetime import datetime  # 日期时间处理
 
 # 第三方库导入
@@ -74,11 +75,11 @@ CONFIG = {
     "ema_long": 26,        # 长期EMA周期
     
     # 风险管理参数
-    "base_leverage": 5,               # 基础杠杆倍数
-    "leverage": 5,                    # 当前杠杆倍数（动态调整）
-    "leverage_increment": 5,           # 亏损后杠杆增加量
+    "base_leverage": 10,               # 基础杠杆倍数
+    "leverage": 10,                    # 当前杠杆倍数（动态调整）
+    "leverage_increment": 2,           # 亏损后杠杆增加量
     "position_percentage": 0.95,       # 默认仓位比例（已弃用，保留兼容性）
-    "fixed_trade_amount": 2,        # 固定交易金额（USDT）
+    "fixed_trade_amount": 6,        # 固定交易金额（USDT）
     
     # 资金分配策略（新版本）
     "symbol_allocation": {
@@ -206,6 +207,52 @@ class WebTrader:
         # ========== 检测状态恢复 ==========
         self.load_detection_state()           # 5. 加载检测状态
         self.check_missed_detections_on_startup()  # 6. 检查启动时遗漏的检测点
+
+        # ========== 资金倍数持久化 ==========
+        self.max_capital_multiplier_file = os.path.join(os.path.dirname(__file__), "capital_multiplier.json")
+        self.max_capital_multiplier = 1 # 初始最大倍数为1
+        self.insurance_fund = 0 # 初始保险金为0
+        self.last_insurance_fund_multiplier_threshold = 0.0 # 初始保险金倍数阈值为0.0
+        self._load_max_capital_multiplier()
+
+    def _load_max_capital_multiplier(self):
+        """
+        从文件中加载最大交易倍数、保险金和上次保险金倍数阈值。
+        """
+        if os.path.exists(self.max_capital_multiplier_file):
+            try:
+                with open(self.max_capital_multiplier_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    self.max_capital_multiplier = data.get('max_capital_multiplier', 1)
+                    self.insurance_fund = data.get('insurance_fund', 0)
+                    self.last_insurance_fund_multiplier_threshold = data.get('last_insurance_fund_multiplier_threshold', 0.0)
+                self.logger.info(f"加载交易倍数持久化数据成功: 最大倍数={self.max_capital_multiplier}, 保险金={self.insurance_fund}, 上次保险金阈值={self.last_insurance_fund_multiplier_threshold}")
+            except Exception as e:
+                self.logger.error(f"加载交易倍数持久化数据失败: {e}")
+                # 加载失败时，重置为默认值
+                self.max_capital_multiplier = 1
+                self.insurance_fund = 0
+                self.last_insurance_fund_multiplier_threshold = 0.0
+                self._save_max_capital_multiplier() # 尝试保存默认值
+        else:
+            self.logger.info("交易倍数持久化文件不存在，创建新文件并初始化。")
+            self._save_max_capital_multiplier() # 文件不存在时创建并保存默认值
+
+    def _save_max_capital_multiplier(self):
+        """
+        将最大交易倍数、保险金和上次保险金倍数阈值保存到文件。
+        """
+        try:
+            data = {
+                'max_capital_multiplier': self.max_capital_multiplier,
+                'insurance_fund': self.insurance_fund,
+                'last_insurance_fund_multiplier_threshold': self.last_insurance_fund_multiplier_threshold
+            }
+            with open(self.max_capital_multiplier_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=4)
+            self.logger.info(f"保存交易倍数持久化数据成功: 最大倍数={self.max_capital_multiplier}, 保险金={self.insurance_fund}, 上次保险金阈值={self.last_insurance_fund_multiplier_threshold}")
+        except Exception as e:
+            self.logger.error(f"保存交易倍数持久化数据失败: {e}")
     
     def add_log_entry(self, level: str, message: str):
         """
@@ -632,9 +679,37 @@ class WebTrader:
 
             # 计算当前资金与初始资金的倍数，并调整固定交易金额
             if CONFIG["initial_capital"] > 0:
-                capital_multiplier = max(1, int(self.capital / CONFIG["initial_capital"])) # 至少为1倍
+                # 加载历史最大倍数、保险金和上次保险金倍数阈值
+                self._load_max_capital_multiplier()
+
+                # 计算当前资金与初始资金的比例
+                capital_ratio = self.capital / CONFIG["initial_capital"]
+
+                # 保险金累积逻辑
+                # 检查是否超过新的 n.5 阈值，并且该阈值尚未触发过保险金累积
+                # 例如，如果 capital_ratio = 2.6，则 n = 2，阈值为 2.5
+                # 如果 capital_ratio = 3.1，则 n = 3，阈值为 3.5
+                n_threshold = math.floor(capital_ratio - 0.5) + 0.5 # 计算当前的 n.5 阈值
+
+                if n_threshold > self.last_insurance_fund_multiplier_threshold and n_threshold >= 1.5: # 确保 n.5 阈值至少从 1.5 开始
+                    # 累积保险金：当前资金的 1/10
+                    insurance_to_add = self.capital / 10
+                    self.insurance_fund += insurance_to_add
+                    self.last_insurance_fund_multiplier_threshold = n_threshold
+                    self._save_max_capital_multiplier() # 保存更新后的保险金和阈值
+                    self.logger.info(f"🎉 触发保险金累积！当前资金倍数比例 {capital_ratio:.2f}x 超过 {n_threshold}x 阈值。新增保险金: {insurance_to_add:.2f} U, 当前总保险金: {self.insurance_fund:.2f} U")
+
+                # 计算当前资金倍数，减去保险金
+                current_calculated_multiplier = max(1, int((self.capital - self.insurance_fund) / CONFIG["initial_capital"])) # 至少为1倍
+
+                # 确保倍数只增不减
+                if current_calculated_multiplier > self.max_capital_multiplier:
+                    self.max_capital_multiplier = current_calculated_multiplier
+                    self._save_max_capital_multiplier() # 保存更新后的最大倍数
+
+                capital_multiplier = self.max_capital_multiplier # 使用只增不减的倍数
                 self.current_fixed_trade_amount = self.original_fixed_trade_amount * capital_multiplier
-                self.logger.info(f"✅ 账户总资金: {self.capital:.2f} U, 初始资金: {CONFIG["initial_capital"]} U, 倍数: {capital_multiplier}x, 调整后固定交易金额: {self.current_fixed_trade_amount:.2f} U")
+                self.logger.info(f"✅ 账户总资金: {self.capital:.2f} U, 初始资金: {CONFIG["initial_capital"]} U, 保险金: {self.insurance_fund:.2f} U, 当前倍数: {current_calculated_multiplier}x, 历史最大倍数: {capital_multiplier}x, 调整后固定交易金额: {self.current_fixed_trade_amount:.2f} U")
             else:
                 self.logger.warning("初始资金(initial_capital)不能为0，无法动态调整交易金额。")
             
